@@ -291,7 +291,12 @@ def main() -> None:
     task_d_weights_exist = any(task_d_directory.glob("weights_*.csv"))
     source_label = "filesystem"
 
-    if task_c_results_path.exists() and task_d_weights_exist:
+    if args.archive is not None:
+        archive_path = resolve_archive_path(args.root, args.archive)
+        task_c_details = load_task_c_details_from_archive(archive_path)
+        task_d_long, task_d_summary = load_task_d_weights_from_archive(archive_path)
+        source_label = f"archive ({archive_path.name})"
+    elif task_c_results_path.exists() and task_d_weights_exist:
         task_c_details = load_task_c_details_from_filesystem(task_c_results_path)
         task_d_long, task_d_summary = load_task_d_weights_from_filesystem(task_d_directory)
     else:
