@@ -1,0 +1,6 @@
+case_name,weights_count,total_weight,target_group_weight,min_weight,max_weight,weight_range,mean_weight,median_weight,std_dev_weight,even_weights,odd_weights
+large_differences,6,303,151.5,1,100,99,50.5,50.5,53.136616,3,3
+large_set,20,1050,525.0,1,100,99,52.5,58.0,36.668501,4,16
+many_small_weights,30,120,60.0,1,10,9,4,3.0,2.779233,10,20
+patterned_weights,10,550,275.0,10,100,90,55,55.0,30.276504,10,0
+small_set,5,150,75.0,10,50,40,30,30,15.811388,5,0
