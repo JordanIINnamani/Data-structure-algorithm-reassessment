@@ -5,11 +5,17 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import math
 import statistics
+import zipfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+
+TASK_C_RESULTS_RELATIVE = Path("Task C") / "experiment_results.csv"
+TASK_D_RELATIVE = Path("TASK D")
 
 
 def write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[Dict[str, object]]) -> None:
@@ -28,34 +34,52 @@ def round_or_zero(value: float, digits: int = 6) -> float:
     return round(value, digits)
 
 
-def load_task_c_details(experiment_results_path: Path) -> List[Dict[str, object]]:
-    """Load and normalize Task C experiment runs for Tableau."""
+def normalize_task_c_rows(reader: csv.DictReader) -> List[Dict[str, object]]:
+    """Convert raw Task C rows into a Tableau-friendly schema."""
+    detail_rows: List[Dict[str, object]] = []
+    for row in reader:
+        dataset_size = int(row["dataset_size"])
+        algorithm = row["algorithm"].strip()
+        run_number = int(row["run_number"])
+        time_ms = float(row["time_ms"])
+        slug = algorithm.lower().replace(" ", "_")
+
+        detail_rows.append(
+            {
+                "dataset_size": dataset_size,
+                "algorithm": algorithm,
+                "algorithm_slug": slug,
+                "run_number": run_number,
+                "time_ms": round_or_zero(time_ms, 6),
+                "time_seconds": round_or_zero(time_ms / 1000.0, 6),
+                "log10_time_ms": round(math.log10(time_ms), 6) if time_ms > 0 else "",
+            }
+        )
+
+    return detail_rows
+
+
+def load_task_c_details_from_filesystem(experiment_results_path: Path) -> List[Dict[str, object]]:
+    """Load Task C details when extracted folders are present."""
     if not experiment_results_path.exists():
         raise FileNotFoundError(f"Missing Task C results file: {experiment_results_path}")
 
-    detail_rows: List[Dict[str, object]] = []
     with experiment_results_path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        for row in reader:
-            dataset_size = int(row["dataset_size"])
-            algorithm = row["algorithm"].strip()
-            run_number = int(row["run_number"])
-            time_ms = float(row["time_ms"])
-            slug = algorithm.lower().replace(" ", "_")
+        return normalize_task_c_rows(csv.DictReader(handle))
 
-            detail_rows.append(
-                {
-                    "dataset_size": dataset_size,
-                    "algorithm": algorithm,
-                    "algorithm_slug": slug,
-                    "run_number": run_number,
-                    "time_ms": round_or_zero(time_ms, 6),
-                    "time_seconds": round_or_zero(time_ms / 1000.0, 6),
-                    "log10_time_ms": round(math.log10(time_ms), 6) if time_ms > 0 else "",
-                }
-            )
 
-    return detail_rows
+def load_task_c_details_from_archive(archive_path: Path) -> List[Dict[str, object]]:
+    """Load Task C details directly from the uploaded ZIP archive."""
+    target_member = str(TASK_C_RESULTS_RELATIVE).replace("\\", "/")
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        try:
+            with archive.open(target_member, "r") as member:
+                text_stream = io.TextIOWrapper(member, encoding="utf-8")
+                return normalize_task_c_rows(csv.DictReader(text_stream))
+        except KeyError as exc:
+            raise FileNotFoundError(
+                f"Could not find '{target_member}' inside archive: {archive_path}"
+            ) from exc
 
 
 def summarize_task_c(detail_rows: Sequence[Dict[str, object]]) -> List[Dict[str, object]]:
@@ -113,29 +137,23 @@ def build_task_c_speedup(summary_rows: Sequence[Dict[str, object]]) -> List[Dict
     return speedup_rows
 
 
-def load_task_d_weights(task_d_directory: Path) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
-    """Load Task D weight CSVs and produce long-format + summary outputs."""
-    csv_paths = sorted(task_d_directory.glob("weights_*.csv"))
-    if not csv_paths:
-        raise FileNotFoundError(f"No Task D weights files found in: {task_d_directory}")
+def parse_weights(reader: csv.reader) -> List[int]:
+    """Parse a CSV weight row file into a flat list of integers."""
+    weights: List[int] = []
+    for row in reader:
+        for value in row:
+            stripped = value.strip()
+            if stripped:
+                weights.append(int(stripped))
+    return weights
 
+
+def build_task_d_outputs(weight_sets: Sequence[Tuple[str, List[int]]]) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+    """Build long-format and per-case summary outputs for Task D."""
     long_rows: List[Dict[str, object]] = []
     summary_rows: List[Dict[str, object]] = []
 
-    for csv_path in csv_paths:
-        case_name = csv_path.stem
-        if case_name.startswith("weights_"):
-            case_name = case_name[len("weights_") :]
-
-        weights: List[int] = []
-        with csv_path.open(newline="", encoding="utf-8") as handle:
-            reader = csv.reader(handle)
-            for row in reader:
-                for value in row:
-                    stripped = value.strip()
-                    if stripped:
-                        weights.append(int(stripped))
-
+    for case_name, weights in weight_sets:
         for index, weight in enumerate(weights, start=1):
             long_rows.append(
                 {
@@ -173,6 +191,72 @@ def load_task_d_weights(task_d_directory: Path) -> Tuple[List[Dict[str, object]]
     return long_rows, summary_rows
 
 
+def load_task_d_weights_from_filesystem(task_d_directory: Path) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+    """Load Task D weights from extracted files."""
+    csv_paths = sorted(task_d_directory.glob("weights_*.csv"))
+    if not csv_paths:
+        raise FileNotFoundError(f"No Task D weights files found in: {task_d_directory}")
+
+    weight_sets: List[Tuple[str, List[int]]] = []
+    for csv_path in csv_paths:
+        case_name = csv_path.stem
+        if case_name.startswith("weights_"):
+            case_name = case_name[len("weights_") :]
+        with csv_path.open(newline="", encoding="utf-8") as handle:
+            weight_sets.append((case_name, parse_weights(csv.reader(handle))))
+
+    return build_task_d_outputs(weight_sets)
+
+
+def load_task_d_weights_from_archive(archive_path: Path) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+    """Load Task D weights directly from ZIP archive members."""
+    member_prefix = str(TASK_D_RELATIVE).replace("\\", "/") + "/weights_"
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        members = sorted(
+            member_name
+            for member_name in archive.namelist()
+            if member_name.startswith(member_prefix) and member_name.lower().endswith(".csv")
+        )
+        if not members:
+            raise FileNotFoundError(f"No Task D weights files found in archive: {archive_path}")
+
+        weight_sets: List[Tuple[str, List[int]]] = []
+        for member_name in members:
+            stem = Path(member_name).stem
+            case_name = stem[len("weights_") :] if stem.startswith("weights_") else stem
+            with archive.open(member_name, "r") as member:
+                text_stream = io.TextIOWrapper(member, encoding="utf-8")
+                weight_sets.append((case_name, parse_weights(csv.reader(text_stream))))
+
+    return build_task_d_outputs(weight_sets)
+
+
+def resolve_archive_path(root: Path, archive_argument: Optional[Path]) -> Path:
+    """Resolve a usable archive path from explicit argument or auto-detection."""
+    if archive_argument is not None:
+        archive_path = archive_argument if archive_argument.is_absolute() else root / archive_argument
+        if archive_path.exists():
+            return archive_path
+        raise FileNotFoundError(f"Archive not found: {archive_path}")
+
+    archives = sorted(root.glob("*.zip"))
+    if not archives:
+        raise FileNotFoundError(
+            "No ZIP archive found in project root. Provide --archive or extract Task C/TASK D folders."
+        )
+    if len(archives) == 1:
+        return archives[0]
+
+    preferred = [path for path in archives if "REASSESSMENT" in path.name.upper()]
+    if len(preferred) == 1:
+        return preferred[0]
+
+    archive_names = ", ".join(path.name for path in archives)
+    raise FileNotFoundError(
+        f"Multiple ZIP archives found ({archive_names}). Provide --archive to choose one."
+    )
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     project_root = Path(__file__).resolve().parents[1]
@@ -182,7 +266,13 @@ def parse_args() -> argparse.Namespace:
         "--root",
         type=Path,
         default=project_root,
-        help="Project root containing 'Task C' and 'TASK D' directories.",
+        help="Project root containing extracted folders or the reassessment ZIP archive.",
+    )
+    parser.add_argument(
+        "--archive",
+        type=Path,
+        default=None,
+        help="Optional path to ZIP archive. If omitted, a single *.zip in --root is auto-detected.",
     )
     parser.add_argument(
         "--output",
@@ -196,13 +286,22 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    task_c_results_path = args.root / "Task C" / "experiment_results.csv"
-    task_d_directory = args.root / "TASK D"
+    task_c_results_path = args.root / TASK_C_RESULTS_RELATIVE
+    task_d_directory = args.root / TASK_D_RELATIVE
+    task_d_weights_exist = any(task_d_directory.glob("weights_*.csv"))
+    source_label = "filesystem"
 
-    task_c_details = load_task_c_details(task_c_results_path)
+    if task_c_results_path.exists() and task_d_weights_exist:
+        task_c_details = load_task_c_details_from_filesystem(task_c_results_path)
+        task_d_long, task_d_summary = load_task_d_weights_from_filesystem(task_d_directory)
+    else:
+        archive_path = resolve_archive_path(args.root, args.archive)
+        task_c_details = load_task_c_details_from_archive(archive_path)
+        task_d_long, task_d_summary = load_task_d_weights_from_archive(archive_path)
+        source_label = f"archive ({archive_path.name})"
+
     task_c_summary = summarize_task_c(task_c_details)
     task_c_speedup = build_task_c_speedup(task_c_summary)
-    task_d_long, task_d_summary = load_task_d_weights(task_d_directory)
 
     write_csv(
         args.output / "task_c_runs_detail.csv",
@@ -262,6 +361,7 @@ def main() -> None:
         task_d_summary,
     )
 
+    print(f"Data source used: {source_label}")
     print(f"Wrote Tableau CSV exports to: {args.output}")
     print("- task_c_runs_detail.csv")
     print("- task_c_algorithm_summary.csv")

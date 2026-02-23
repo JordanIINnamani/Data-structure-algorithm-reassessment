@@ -5,18 +5,21 @@ This folder contains a small data-prep utility to generate **Tableau-ready CSV f
 - `Task C/experiment_results.csv` (sorting experiment timing runs)
 - `TASK D/weights_*.csv` (Scales problem test-case weights)
 
+If those folders are not extracted, the script can also read directly from the uploaded reassessment ZIP archive.
+
 ## Run
 
 From the repository root:
 
 ```bash
-python tableau/prepare_tableau_data.py
+python3 tableau/prepare_tableau_data.py
 ```
 
 Optional arguments:
 
 ```bash
-python tableau/prepare_tableau_data.py --root /path/to/project --output /path/to/output
+python3 tableau/prepare_tableau_data.py --root /path/to/project --output /path/to/output
+python3 tableau/prepare_tableau_data.py --archive "/path/to/reassessment.zip"
 ```
 
 By default, output files are written to `tableau/output/`.
